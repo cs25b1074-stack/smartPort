@@ -3,22 +3,28 @@
 
 #include "Manifest.h"
 
-// Ship states
-const int SHIP_SCHEDULED = 0;
-const int SHIP_WAITING = 1;
-const int SHIP_BERTHED = 2;
-const int SHIP_OPERATING = 3;
-const int SHIP_READY_TO_DEPART = 4;
-const int SHIP_DEPARTED = 5;
-
-const int SHIP_NAME_SIZE = 50;
-
 class Ship {
+public:
+    // Ship states
+    static const int SCHEDULED = 1;
+    static const int WAITING = 2;
+    static const int BERTHED = 3;
+    static const int OPERATING = 4;
+    static const int READY_TO_DEPART = 5;
+    static const int DEPARTED = 6;
+
+    // Validation limits
+    static const int MAX_NAME_LENGTH = 49;      // leaves room for '\0'
+    static const double MIN_LENGTH;             // 20 m
+    static const double MAX_LENGTH;             // 400 m
+    static const double MIN_DEPTH;              // 2 m
+    static const double MAX_DEPTH;              // 25 m
+
 private:
     static int nextId;          // used to generate unique ship IDs
 
     int shipId;
-    char shipName[SHIP_NAME_SIZE];
+    char shipName[MAX_NAME_LENGTH + 1];
     double length;              // in metres
     double requiredDepth;       // draft in metres
     int arrivalTime;            // scheduled, minutes since 00:00
@@ -28,19 +34,26 @@ private:
     int actualDepartureTime;
     int status;
     int berthId;
+    bool valid;
 
     Manifest manifest;          // containers to unload at this port
     Manifest loadingList;       // containers to load from the yard
 
 public:
     Ship();
-    Ship(const char* name, double length, double depth);
     Ship(const char* name, double length, double depth,
-         int arrival, int deadline);
+         int arrivalTime, int departureDeadline);
 
     // The compiler-generated copy constructor and assignment operator are
-    // safe here because Manifest performs its own deep copy.
+    // safe here because Manifest performs its own deep copy. A copy keeps
+    // the same ID and valid flag, because it represents the same ship.
 
+    static bool isValidName(const char* name);
+    static bool isValidLength(double length);
+    static bool isValidDepth(double depth);
+    static bool isValidSchedule(int arrivalTime, int departureDeadline);
+
+    bool isValid() const;
     int getId() const;
     const char* getName() const;
     double getLength() const;
@@ -55,7 +68,6 @@ public:
     const Manifest& getManifest() const;
     const Manifest& getLoadingList() const;
 
-    void setSchedule(int arrival, int deadline);
     bool addContainer(int containerId);
     bool addLoadContainer(int containerId);
 

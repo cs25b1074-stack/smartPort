@@ -4,26 +4,44 @@
 
 using namespace std;
 
-Crane::Crane() {
-    craneId = 0;
-    maximumLiftWeight = 0.0;
-    currentJobId = -1;
-    status = CRANE_AVAILABLE;
-    handlingMinutesPerContainer = 1;
-    breakdownTime = -1;
-    repairMinutes = 0;
-    backInServiceTime = -1;
+const double Crane::MIN_LIFT_WEIGHT = 1.0;
+const double Crane::MAX_LIFT_WEIGHT = 100.0;
+int Crane::nextId = 1;
+
+bool Crane::isValidLiftWeight(double weight) {
+    return weight >= MIN_LIFT_WEIGHT && weight <= MAX_LIFT_WEIGHT;
 }
 
-Crane::Crane(int id, double maxLift, int minutesPerContainer) {
-    craneId = id;
-    maximumLiftWeight = (maxLift > 0) ? maxLift : 0.0;
-    currentJobId = -1;
-    status = CRANE_AVAILABLE;
-    handlingMinutesPerContainer = (minutesPerContainer > 0) ? minutesPerContainer : 1;
-    breakdownTime = -1;
-    repairMinutes = 0;
-    backInServiceTime = -1;
+bool Crane::isValidHandlingTime(int minutes) {
+    return minutes >= MIN_HANDLING_TIME && minutes <= MAX_HANDLING_TIME;
+}
+
+bool Crane::isValidRepairTime(int minutes) {
+    return minutes >= 1 && minutes <= MAX_REPAIR_TIME;
+}
+
+// Placeholder used to fill arrays; it is invalid and does not use up an ID
+Crane::Crane()
+    : craneId(0), maximumLiftWeight(0.0), currentJobId(-1), status(0),
+      handlingMinutesPerContainer(0), busyMinutes(0), valid(false),
+      breakdownTime(-1), repairMinutes(0), backInServiceTime(-1) {
+}
+
+// If either value is illegal the object stays an invalid placeholder
+Crane::Crane(double maxLiftWeight, int minutesPerContainer)
+    : Crane() {
+    if (!isValidLiftWeight(maxLiftWeight) || !isValidHandlingTime(minutesPerContainer)) {
+        return;
+    }
+    maximumLiftWeight = maxLiftWeight;
+    handlingMinutesPerContainer = minutesPerContainer;
+    status = AVAILABLE;
+    craneId = nextId++;
+    valid = true;
+}
+
+bool Crane::isValid() const {
+    return valid;
 }
 
 int Crane::getId() const {
@@ -42,8 +60,16 @@ int Crane::getStatus() const {
     return status;
 }
 
-int Crane::getHandlingMinutes() const {
+int Crane::getHandlingTime() const {
     return handlingMinutesPerContainer;
+}
+
+int Crane::getBusyMinutes() const {
+    return busyMinutes;
+}
+
+int Crane::getRepairMinutes() const {
+    return repairMinutes;
 }
 
 int Crane::getBackInServiceTime() const {
@@ -51,95 +77,104 @@ int Crane::getBackInServiceTime() const {
 }
 
 bool Crane::canHandle(const Container& container) const {
-    return container.getWeight() <= maximumLiftWeight;
+    return valid && container.isValid() &&
+           container.getWeight() <= maximumLiftWeight;
 }
 
 bool Crane::isAvailable() const {
-    return status == CRANE_AVAILABLE;
+    return valid && status == AVAILABLE;
 }
 
 bool Crane::isInService() const {
-    return status != CRANE_OUT_OF_SERVICE;
+    return valid && status != OUT_OF_SERVICE;
 }
 
 // A crane only ever works on one job at a time
 bool Crane::assignJob(int jobId) {
-    if (status != CRANE_AVAILABLE) {
-        cout << "Error: crane " << craneId << " is " << statusToString(status)
-             << " and cannot take job " << jobId << endl;
+    if (!isAvailable() || jobId <= 0) {
         return false;
     }
     currentJobId = jobId;
-    status = CRANE_BUSY;
+    status = BUSY;
     return true;
 }
 
-// Returns the finished job's ID, or -1 if the crane was not busy
-int Crane::completeJob() {
-    if (status != CRANE_BUSY) {
-        return -1;
+void Crane::completeJob(int minutesWorked) {
+    if (status != BUSY) {
+        return;
     }
-    int finished = currentJobId;
+    if (minutesWorked > 0) {
+        busyMinutes += minutesWorked;
+    }
     currentJobId = -1;
-    status = CRANE_AVAILABLE;
-    return finished;
+    status = AVAILABLE;
 }
 
-void Crane::scheduleBreakdown(int time, int repairDuration) {
+// Stops the crane, dropping any job it was working on. The caller reads
+// getCurrentJobId() first so it can put that job back in the queue.
+// backInServiceAt = -1 means "until repair() is called".
+void Crane::setOutOfService(int backInServiceAt) {
+    if (!valid) {
+        return;
+    }
+    currentJobId = -1;
+    status = OUT_OF_SERVICE;
+    backInServiceTime = backInServiceAt;
+    breakdownTime = -1;
+}
+
+void Crane::repair() {
+    if (status != OUT_OF_SERVICE) {
+        return;
+    }
+    status = AVAILABLE;
+    backInServiceTime = -1;
+}
+
+bool Crane::scheduleBreakdown(int time, int repairDuration) {
+    if (!valid || time < 0 || !isValidRepairTime(repairDuration)) {
+        return false;
+    }
     breakdownTime = time;
-    repairMinutes = (repairDuration > 0) ? repairDuration : 1;
+    repairMinutes = repairDuration;
+    return true;
 }
 
 bool Crane::isBreakdownDue(int currentTime) const {
     return breakdownTime != -1 && currentTime >= breakdownTime &&
-           status != CRANE_OUT_OF_SERVICE;
+           status != OUT_OF_SERVICE;
 }
 
 bool Crane::isRepairDue(int currentTime) const {
-    return status == CRANE_OUT_OF_SERVICE && currentTime >= backInServiceTime;
-}
-
-// Takes the crane out of service and returns the job it was working on
-// (-1 if it was idle) so the caller can put that job back in the queue.
-// A repairDuration of 0 uses the duration given to scheduleBreakdown().
-int Crane::setOutOfService(int currentTime, int repairDuration) {
-    if (repairDuration <= 0) {
-        repairDuration = (repairMinutes > 0) ? repairMinutes : 1;
-    }
-    int interruptedJob = (status == CRANE_BUSY) ? currentJobId : -1;
-    currentJobId = -1;
-    status = CRANE_OUT_OF_SERVICE;
-    backInServiceTime = currentTime + repairDuration;
-    breakdownTime = -1;
-    return interruptedJob;
-}
-
-bool Crane::repair() {
-    if (status != CRANE_OUT_OF_SERVICE) {
-        return false;
-    }
-    status = CRANE_AVAILABLE;
-    backInServiceTime = -1;
-    return true;
+    return status == OUT_OF_SERVICE && backInServiceTime != -1 &&
+           currentTime >= backInServiceTime;
 }
 
 void Crane::display() const {
+    if (!valid) {
+        cout << "Crane (invalid placeholder)" << endl;
+        return;
+    }
     cout << "Crane " << craneId << " (lift " << maximumLiftWeight << " t, "
          << handlingMinutesPerContainer << " min/container): "
          << statusToString(status);
-    if (status == CRANE_BUSY) {
+    if (status == BUSY) {
         cout << " on job " << currentJobId;
-    } else if (status == CRANE_OUT_OF_SERVICE) {
+    } else if (status == OUT_OF_SERVICE && backInServiceTime != -1) {
         cout << " until " << PortTime(backInServiceTime);
+    }
+    cout << ", " << busyMinutes << " min worked";
+    if (breakdownTime != -1) {
+        cout << ", breakdown planned at " << PortTime(breakdownTime);
     }
     cout << endl;
 }
 
 const char* Crane::statusToString(int status) {
     switch (status) {
-        case CRANE_AVAILABLE:      return "AVAILABLE";
-        case CRANE_BUSY:           return "BUSY";
-        case CRANE_OUT_OF_SERVICE: return "OUT_OF_SERVICE";
-        default:                   return "UNKNOWN";
+        case AVAILABLE:      return "AVAILABLE";
+        case BUSY:           return "BUSY";
+        case OUT_OF_SERVICE: return "OUT_OF_SERVICE";
+        default:             return "UNKNOWN";
     }
 }

@@ -3,18 +3,18 @@
 
 using namespace std;
 
-ContainerYard::ContainerYard(int capacity) {
-    slotCapacity = (capacity > 0) ? capacity : 50;
-    slotCount = 0;
-    slots = new YardSlot[slotCapacity];
+// An empty yard; the user chooses its size later with setup()
+ContainerYard::ContainerYard()
+    : slots(nullptr), slotCount(0), configured(false) {
 }
 
-ContainerYard::ContainerYard(const ContainerYard& other) {
-    slotCapacity = other.slotCapacity;
-    slotCount = other.slotCount;
-    slots = new YardSlot[slotCapacity];
-    for (int i = 0; i < slotCount; i++) {
-        slots[i] = other.slots[i];
+ContainerYard::ContainerYard(const ContainerYard& other)
+    : slots(nullptr), slotCount(other.slotCount), configured(other.configured) {
+    if (slotCount > 0) {
+        slots = new YardSlot[slotCount];
+        for (int i = 0; i < slotCount; i++) {
+            slots[i] = other.slots[i];
+        }
     }
 }
 
@@ -23,15 +23,18 @@ ContainerYard& ContainerYard::operator=(const ContainerYard& other) {
         return *this;
     }
 
-    YardSlot* newSlots = new YardSlot[other.slotCapacity];
-    for (int i = 0; i < other.slotCount; i++) {
-        newSlots[i] = other.slots[i];
+    YardSlot* newSlots = nullptr;
+    if (other.slotCount > 0) {
+        newSlots = new YardSlot[other.slotCount];
+        for (int i = 0; i < other.slotCount; i++) {
+            newSlots[i] = other.slots[i];
+        }
     }
 
     delete[] slots;
     slots = newSlots;
-    slotCapacity = other.slotCapacity;
     slotCount = other.slotCount;
+    configured = other.configured;
     return *this;
 }
 
@@ -39,47 +42,59 @@ ContainerYard::~ContainerYard() {
     delete[] slots;
 }
 
-// The yard has a fixed physical capacity, so slots cannot be added past it
-bool ContainerYard::addSlot(int type, double maxWeight) {
-    if (slotCount == slotCapacity) {
-        cout << "Error: yard is at its maximum of " << slotCapacity
-             << " slots" << endl;
+bool ContainerYard::isValidSlotCounts(int standard, int reefer, int hazard) {
+    if (standard < 0 || reefer < 0 || hazard < 0) {
         return false;
     }
-    slots[slotCount] = YardSlot(slotCount + 1, type, maxWeight);
-    slotCount++;
+    int total = standard + reefer + hazard;
+    return total >= 1 && total <= MAX_TOTAL_SLOTS;
+}
+
+// Works like a validating constructor: every value is checked first, and
+// the yard is left unchanged if any of them is invalid
+bool ContainerYard::setup(int standardSlots, int reeferSlots, int hazardSlots,
+                          double maxWeightPerSlot) {
+    if (!isValidSlotCounts(standardSlots, reeferSlots, hazardSlots) ||
+        !YardSlot::isValidMaxWeight(maxWeightPerSlot)) {
+        return false;
+    }
+
+    delete[] slots;
+    slotCount = standardSlots + reeferSlots + hazardSlots;
+    slots = new YardSlot[slotCount];
+
+    int index = 0;
+    for (int i = 0; i < standardSlots; i++, index++) {
+        slots[index] = YardSlot(index + 1, maxWeightPerSlot, Container::STANDARD);
+    }
+    for (int i = 0; i < reeferSlots; i++, index++) {
+        slots[index] = YardSlot(index + 1, maxWeightPerSlot, Container::REFRIGERATED);
+    }
+    for (int i = 0; i < hazardSlots; i++, index++) {
+        slots[index] = YardSlot(index + 1, maxWeightPerSlot, Container::HAZARDOUS);
+    }
+    configured = true;
     return true;
 }
 
-// Returns how many slots were actually added
-int ContainerYard::addSlots(int count, int type, double maxWeight) {
-    int added = 0;
-    for (int i = 0; i < count; i++) {
-        if (!addSlot(type, maxWeight)) {
-            break;
-        }
-        added++;
-    }
-    return added;
+bool ContainerYard::isConfigured() const {
+    return configured;
 }
 
 bool ContainerYard::storeContainer(const Container& container) {
-    if (findContainer(container.getId()) != -1) {
-        cout << "Error: container " << container.getId()
-             << " is already stored in the yard" << endl;
+    if (!container.isValid() || findContainer(container.getId()) != -1) {
         return false;
     }
     int index = findCompatibleSlot(container);
     if (index == -1) {
         return false;
     }
-    return slots[index].store(container);
+    return slots[index].store(container.getId());
 }
 
 bool ContainerYard::retrieveContainer(int containerId) {
     int index = findContainer(containerId);
     if (index == -1) {
-        cout << "Error: container " << containerId << " is not in the yard" << endl;
         return false;
     }
     slots[index].release();
@@ -102,6 +117,9 @@ bool ContainerYard::supports(const Container& container) const {
 
 // Returns the index of the first free slot that accepts the container, or -1
 int ContainerYard::findCompatibleSlot(const Container& container) const {
+    if (!container.isValid()) {
+        return -1;
+    }
     return findCompatibleSlot(container.getType(), container.getWeight());
 }
 
@@ -124,7 +142,7 @@ int ContainerYard::findContainer(int containerId) const {
     return -1;
 }
 
-int ContainerYard::getSlotCount() const {
+int ContainerYard::getTotalSlots() const {
     return slotCount;
 }
 
@@ -152,16 +170,25 @@ int ContainerYard::getFreeSlots(int containerType) const {
     return free;
 }
 
+int ContainerYard::countSlotsOfType(int containerType) const {
+    int total = 0;
+    for (int i = 0; i < slotCount; i++) {
+        if (slots[i].getAllowedType() == containerType) {
+            total++;
+        }
+    }
+    return total;
+}
+
 void ContainerYard::displayYard() const {
+    if (!configured) {
+        cout << "Container yard: not set up yet" << endl;
+        return;
+    }
     cout << "Container yard: " << getOccupiedSlots() << "/" << slotCount
          << " slots occupied" << endl;
-    for (int type = TYPE_STANDARD; type <= TYPE_HAZARDOUS; type++) {
-        int total = 0;
-        for (int i = 0; i < slotCount; i++) {
-            if (slots[i].getAllowedType() == type) {
-                total++;
-            }
-        }
+    for (int type = Container::STANDARD; type <= Container::HAZARDOUS; type++) {
+        int total = countSlotsOfType(type);
         if (total == 0) {
             continue;
         }

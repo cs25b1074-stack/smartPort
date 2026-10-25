@@ -1,24 +1,30 @@
 #ifndef CONTAINER_H
 #define CONTAINER_H
 
-// Container types
-const int TYPE_STANDARD = 0;
-const int TYPE_REFRIGERATED = 1;
-const int TYPE_HAZARDOUS = 2;
-
-// Container status values
-const int ON_SHIP = 0;
-const int IN_YARD = 1;
-const int ASSIGNED_TO_SHIP = 2;
-const int DELIVERED = 3;
-
-// Sizes of the text fields
-const int OWNER_NAME_SIZE = 50;
-const int CONTENT_DESC_SIZE = 100;
-const int PORT_NAME_SIZE = 50;
-const int SEAL_NUMBER_SIZE = 20;
-
 class Container {
+public:
+    // Container types
+    static const int STANDARD = 1;
+    static const int REFRIGERATED = 2;
+    static const int HAZARDOUS = 3;
+
+    // Container status values
+    static const int ON_SHIP = 1;
+    static const int IN_YARD = 2;
+    static const int ASSIGNED_TO_SHIP = 3;
+    static const int DELIVERED = 4;
+
+    // Validation limits
+    static const double MAX_WEIGHT;         // 35.0 t, defined in Container.cpp
+    static const int MIN_DESTINATION = 1;
+    static const int MAX_DESTINATION = 999;
+
+    // Sizes of the text fields
+    static const int OWNER_NAME_SIZE = 50;
+    static const int CONTENT_DESC_SIZE = 100;
+    static const int PORT_NAME_SIZE = 50;
+    static const int SEAL_NUMBER_SIZE = 20;
+
 private:
     static int nextId;          // used to generate unique container IDs
 
@@ -27,6 +33,7 @@ private:
     int destinationCode;
     int containerType;
     int status;
+    bool valid;
 
     // Additional descriptive text fields
     char ownerName[OWNER_NAME_SIZE];        // shipping company / owner
@@ -45,6 +52,12 @@ public:
               const char* origin, const char* destPort,
               const char* seal);
 
+    static bool isValidWeight(double weight);
+    static bool isValidType(int type);
+    static bool isValidDestination(int destination);
+    static bool isValidStatus(int status);
+
+    bool isValid() const;
     int getId() const;
     double getWeight() const;
     int getDestinationCode() const;

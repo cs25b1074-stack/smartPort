@@ -5,40 +5,49 @@
 
 using namespace std;
 
-PortStatistics::PortStatistics() {
-    shipsCompleted = 0;
-    delayedShips = 0;
-    containersHandled = 0;
-    containersUnloaded = 0;
-    containersLoaded = 0;
-    containersDispatched = 0;
-    totalShipTurnaroundMinutes = 0;
-    totalShipWaitingMinutes = 0;
-    totalDelayMinutes = 0;
-    totalCraneBusyMinutes = 0;
-    totalCraneAvailableMinutes = 0;
-    totalBerthOccupiedMinutes = 0;
-    totalBerthAvailableMinutes = 0;
-    simulatedMinutes = 0;
-    craneBreakdowns = 0;
-    jobsInterrupted = 0;
+PortStatistics::PortStatistics()
+    : shipsCompleted(0), delayedShips(0), containersHandled(0),
+      containersUnloaded(0), containersLoaded(0), containersDispatched(0),
+      totalShipTurnaroundMinutes(0), totalShipWaitingMinutes(0),
+      totalDelayMinutes(0), totalCraneBusyMinutes(0),
+      totalCraneAvailableMinutes(0), totalBerthOccupiedMinutes(0),
+      totalBerthAvailableMinutes(0), craneBreakdowns(0), jobsInterrupted(0) {
 }
 
-void PortStatistics::recordShipDeparture(int turnaround, int waiting, int delay) {
+// Negative values are ignored so a bad call cannot corrupt the totals
+void PortStatistics::recordShipDeparture(int turnaroundMinutes, bool wasLate) {
+    if (turnaroundMinutes < 0) {
+        return;
+    }
     shipsCompleted++;
-    totalShipTurnaroundMinutes += turnaround;
-    totalShipWaitingMinutes += waiting;
-    if (delay > 0) {
+    totalShipTurnaroundMinutes += turnaroundMinutes;
+    if (wasLate) {
         delayedShips++;
-        totalDelayMinutes += delay;
     }
 }
 
-void PortStatistics::recordContainerHandled(int jobType) {
+void PortStatistics::recordWaitingTime(int minutes) {
+    if (minutes > 0) {
+        totalShipWaitingMinutes += minutes;
+    }
+}
+
+void PortStatistics::recordDelay(int minutes) {
+    if (minutes > 0) {
+        totalDelayMinutes += minutes;
+    }
+}
+
+void PortStatistics::recordContainerHandled() {
     containersHandled++;
-    if (jobType == JOB_UNLOAD) {
+}
+
+// Overload that also keeps the unloaded/loaded split
+void PortStatistics::recordContainerHandled(int jobType) {
+    recordContainerHandled();
+    if (jobType == HandlingJob::UNLOAD) {
         containersUnloaded++;
-    } else {
+    } else if (jobType == HandlingJob::LOAD) {
         containersLoaded++;
     }
 }
@@ -47,14 +56,20 @@ void PortStatistics::recordDispatch() {
     containersDispatched++;
 }
 
-// Called once per simulated minute
-void PortStatistics::recordMinute(int busyCranes, int inServiceCranes,
-                                  int occupiedBerths, int totalBerths) {
-    simulatedMinutes++;
-    totalCraneBusyMinutes += busyCranes;
-    totalCraneAvailableMinutes += inServiceCranes;
-    totalBerthOccupiedMinutes += occupiedBerths;
-    totalBerthAvailableMinutes += totalBerths;
+void PortStatistics::recordCraneTime(int busyMinutes, int availableMinutes) {
+    if (busyMinutes < 0 || availableMinutes < 0) {
+        return;
+    }
+    totalCraneBusyMinutes += busyMinutes;
+    totalCraneAvailableMinutes += availableMinutes;
+}
+
+void PortStatistics::recordBerthTime(int occupiedMinutes, int availableMinutes) {
+    if (occupiedMinutes < 0 || availableMinutes < 0) {
+        return;
+    }
+    totalBerthOccupiedMinutes += occupiedMinutes;
+    totalBerthAvailableMinutes += availableMinutes;
 }
 
 void PortStatistics::recordBreakdown(bool interruptedJob) {
@@ -74,10 +89,6 @@ int PortStatistics::getDelayedShips() const {
 
 int PortStatistics::getContainersHandled() const {
     return containersHandled;
-}
-
-int PortStatistics::getSimulatedMinutes() const {
-    return simulatedMinutes;
 }
 
 // Only ships that have departed are counted
@@ -119,7 +130,6 @@ double PortStatistics::getBerthUtilization() const {
 void PortStatistics::generateReport() const {
     cout << fixed << setprecision(1);
     cout << "Performance statistics" << endl;
-    cout << "  Simulated period        : " << simulatedMinutes << " min" << endl;
     cout << "  Ships completed         : " << shipsCompleted << endl;
     cout << "  Ships departed late     : " << delayedShips
          << " (" << getDelayRate() << "%)";

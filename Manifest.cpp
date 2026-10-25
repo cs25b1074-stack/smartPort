@@ -4,7 +4,7 @@
 using namespace std;
 
 Manifest::Manifest(int initialCapacity) {
-    capacity = (initialCapacity > 0) ? initialCapacity : 10;
+    capacity = (initialCapacity >= 1) ? initialCapacity : 10;   // never leave a null array
     count = 0;
     containerIds = new int[capacity];
 }
@@ -52,11 +52,9 @@ void Manifest::grow() {
     capacity = newCapacity;
 }
 
-// Rejects duplicate IDs so a container cannot be listed twice
+// Rejects non-positive and duplicate IDs so a container cannot be listed twice
 bool Manifest::addContainer(int containerId) {
-    if (contains(containerId)) {
-        cout << "Error: container " << containerId
-             << " is already on this manifest" << endl;
+    if (containerId <= 0 || contains(containerId)) {
         return false;
     }
     if (count == capacity) {
@@ -92,7 +90,6 @@ bool Manifest::contains(int containerId) const {
 // Returns -1 for an out-of-range index
 int Manifest::operator[](int index) const {
     if (index < 0 || index >= count) {
-        cout << "Error: manifest index " << index << " out of range" << endl;
         return -1;
     }
     return containerIds[index];

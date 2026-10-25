@@ -6,37 +6,42 @@ using namespace std;
 
 int HandlingJob::nextId = 1;
 
-// Placeholder job used to fill arrays; it does not use up an ID
-HandlingJob::HandlingJob() {
-    jobId = 0;
-    shipId = -1;
-    containerId = -1;
-    jobType = JOB_UNLOAD;
-    priority = PRIORITY_NORMAL;
-    deadline = 0;
-    estimatedDuration = 0;
-    assignedCraneId = -1;
-    status = JOB_PENDING;
-    startTime = -1;
-    completionTime = -1;
-    interruptions = 0;
+bool HandlingJob::isValidJobType(int type) {
+    return type == UNLOAD || type == LOAD;
 }
 
-HandlingJob::HandlingJob(int shipId, int containerId, int jobType, int deadline,
-                         int priority) {
-    jobId = nextId++;
+bool HandlingJob::isValidPriority(int priority) {
+    return priority >= HIGHEST_PRIORITY && priority <= LOWEST_PRIORITY;
+}
+
+// Placeholder used to fill arrays; it is invalid and does not use up an ID
+HandlingJob::HandlingJob()
+    : jobId(0), shipId(0), containerId(0), jobType(0), priority(0),
+      deadline(0), estimatedDuration(0), assignedCraneId(-1), status(0),
+      startTime(-1), completionTime(-1), interruptions(0), valid(false) {
+}
+
+// Jobs are created by PortController, but the values are still checked
+HandlingJob::HandlingJob(int shipId, int containerId, int jobType,
+                         int priority, int deadline, int estimatedDuration)
+    : HandlingJob() {
+    if (shipId <= 0 || containerId <= 0 || !isValidJobType(jobType) ||
+        !isValidPriority(priority) || deadline < 0 || estimatedDuration <= 0) {
+        return;
+    }
     this->shipId = shipId;
     this->containerId = containerId;
-    this->jobType = (jobType == JOB_LOAD) ? JOB_LOAD : JOB_UNLOAD;
+    this->jobType = jobType;
+    this->priority = priority;
     this->deadline = deadline;
-    this->priority = (priority >= PRIORITY_NORMAL && priority <= PRIORITY_EMERGENCY)
-                         ? priority : PRIORITY_NORMAL;
-    estimatedDuration = 0;
-    assignedCraneId = -1;
-    status = JOB_PENDING;
-    startTime = -1;
-    completionTime = -1;
-    interruptions = 0;
+    this->estimatedDuration = estimatedDuration;
+    status = PENDING;
+    jobId = nextId++;
+    valid = true;
+}
+
+bool HandlingJob::isValid() const {
+    return valid;
 }
 
 int HandlingJob::getId() const {
@@ -51,7 +56,7 @@ int HandlingJob::getContainerId() const {
     return containerId;
 }
 
-int HandlingJob::getType() const {
+int HandlingJob::getJobType() const {
     return jobType;
 }
 
@@ -95,64 +100,64 @@ int HandlingJob::getInterruptions() const {
     return interruptions;
 }
 
-bool HandlingJob::assignCrane(int craneId, int duration) {
-    if (status != JOB_PENDING) {
-        cout << "Error: job " << jobId << " is " << statusToString(status)
-             << " and cannot be given a crane" << endl;
+bool HandlingJob::assignCrane(int craneId) {
+    if (status != PENDING || craneId <= 0) {
         return false;
     }
     assignedCraneId = craneId;
-    estimatedDuration = (duration > 0) ? duration : 1;
+    return true;
+}
+
+// Overload used when the crane's own speed replaces the estimate
+bool HandlingJob::assignCrane(int craneId, int actualDuration) {
+    if (actualDuration <= 0 || !assignCrane(craneId)) {
+        return false;
+    }
+    estimatedDuration = actualDuration;
     return true;
 }
 
 bool HandlingJob::markStarted(int currentTime) {
-    if (status != JOB_PENDING || assignedCraneId == -1) {
-        cout << "Error: job " << jobId << " cannot start without a crane" << endl;
+    if (status != PENDING || assignedCraneId == -1 || currentTime < 0) {
         return false;
     }
     startTime = currentTime;
-    status = JOB_IN_PROGRESS;
+    status = IN_PROGRESS;
     return true;
 }
 
 bool HandlingJob::markCompleted(int currentTime) {
-    if (status != JOB_IN_PROGRESS) {
-        cout << "Error: job " << jobId << " cannot complete while "
-             << statusToString(status) << endl;
+    if (status != IN_PROGRESS || currentTime < startTime) {
         return false;
     }
     completionTime = currentTime;
-    status = JOB_COMPLETED;
+    status = COMPLETED;
     return true;
 }
 
 // Puts an in-progress job back in the queue (e.g. after a crane breakdown)
 bool HandlingJob::interrupt() {
-    if (status != JOB_IN_PROGRESS) {
+    if (status != IN_PROGRESS) {
         return false;
     }
-    status = JOB_PENDING;
+    status = PENDING;
     assignedCraneId = -1;
     startTime = -1;
-    estimatedDuration = 0;
     interruptions++;
     return true;
 }
 
 bool HandlingJob::cancel() {
-    if (status != JOB_PENDING) {
-        cout << "Error: job " << jobId << " cannot be cancelled while "
-             << statusToString(status) << endl;
+    if (status != PENDING) {
         return false;
     }
-    status = JOB_CANCELLED;
+    status = CANCELLED;
     return true;
 }
 
-// Priority can only go up, never down
+// Priority can only move towards 1 (more urgent), never away from it
 bool HandlingJob::raisePriority(int newPriority) {
-    if (newPriority <= priority || newPriority > PRIORITY_EMERGENCY) {
+    if (!isValidPriority(newPriority) || newPriority >= priority) {
         return false;
     }
     priority = newPriority;
@@ -160,29 +165,29 @@ bool HandlingJob::raisePriority(int newPriority) {
 }
 
 bool HandlingJob::isPending() const {
-    return status == JOB_PENDING;
+    return status == PENDING;
 }
 
 bool HandlingJob::isActive() const {
-    return status == JOB_IN_PROGRESS;
+    return status == IN_PROGRESS;
 }
 
 bool HandlingJob::isCompleted() const {
-    return status == JOB_COMPLETED;
+    return status == COMPLETED;
 }
 
 bool HandlingJob::isFinished() const {
-    return status == JOB_COMPLETED || status == JOB_CANCELLED;
+    return status == COMPLETED || status == CANCELLED;
 }
 
 // Scheduling rule: "a < b" means a should be handled before b.
-//   1. Emergency jobs first
+//   1. Emergency jobs (priority 1) first
 //   2. Earlier departure deadline first
-//   3. Higher priority breaks ties
+//   3. Higher priority (smaller number) breaks ties
 //   4. Lower job ID (created earlier) breaks remaining ties
 bool HandlingJob::operator<(const HandlingJob& other) const {
-    bool thisEmergency = (priority == PRIORITY_EMERGENCY);
-    bool otherEmergency = (other.priority == PRIORITY_EMERGENCY);
+    bool thisEmergency = (priority == EMERGENCY_PRIORITY);
+    bool otherEmergency = (other.priority == EMERGENCY_PRIORITY);
     if (thisEmergency != otherEmergency) {
         return thisEmergency;
     }
@@ -190,12 +195,16 @@ bool HandlingJob::operator<(const HandlingJob& other) const {
         return deadline < other.deadline;
     }
     if (priority != other.priority) {
-        return priority > other.priority;
+        return priority < other.priority;
     }
     return jobId < other.jobId;
 }
 
 void HandlingJob::display() const {
+    if (!valid) {
+        cout << "Job (invalid placeholder)" << endl;
+        return;
+    }
     cout << "Job #" << jobId << " " << typeToString(jobType)
          << " container " << containerId << " (ship " << shipId
          << ", deadline " << PortTime(deadline) << ", priority " << priority
@@ -208,18 +217,18 @@ void HandlingJob::display() const {
 
 const char* HandlingJob::typeToString(int type) {
     switch (type) {
-        case JOB_UNLOAD: return "UNLOAD";
-        case JOB_LOAD:   return "LOAD";
-        default:         return "UNKNOWN";
+        case UNLOAD: return "UNLOAD";
+        case LOAD:   return "LOAD";
+        default:     return "UNKNOWN";
     }
 }
 
 const char* HandlingJob::statusToString(int status) {
     switch (status) {
-        case JOB_PENDING:     return "PENDING";
-        case JOB_IN_PROGRESS: return "IN_PROGRESS";
-        case JOB_COMPLETED:   return "COMPLETED";
-        case JOB_CANCELLED:   return "CANCELLED";
-        default:              return "UNKNOWN";
+        case PENDING:     return "PENDING";
+        case IN_PROGRESS: return "IN_PROGRESS";
+        case COMPLETED:   return "COMPLETED";
+        case CANCELLED:   return "CANCELLED";
+        default:          return "UNKNOWN";
     }
 }

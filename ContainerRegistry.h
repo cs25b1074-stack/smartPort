@@ -7,19 +7,14 @@
 // refer to containers by ID only.
 class ContainerRegistry {
 private:
-    // An array of pointers is used instead of Container* because
-    // new Container[n] would call the default constructor n times and
-    // use up container IDs for empty placeholder records.
-    Container** containers;
+    Container* containers;
     int count;
     int capacity;
 
     void grow();
-    void copyFrom(const ContainerRegistry& other);
-    void clear();
 
 public:
-    ContainerRegistry(int initialCapacity = 20);
+    ContainerRegistry(int initialCapacity = 10);
     ContainerRegistry(const ContainerRegistry& other);
     ContainerRegistry& operator=(const ContainerRegistry& other);
     ~ContainerRegistry();

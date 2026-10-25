@@ -1,28 +1,20 @@
 #include "PortController.h"
 #include <iostream>
 #include <iomanip>
+#include <cstring>
 
 using namespace std;
 
-PortController::PortController(int startMinutes, int yardCapacity,
-                               int maxBerths, int maxCranes)
-    : registry(20), yard(yardCapacity), scheduler(20),
-      currentTime(startMinutes), importQueue(20) {
-    shipCapacity = 5;
-    shipCount = 0;
-    ships = new Ship[shipCapacity];
+const int INITIAL_CAPACITY = 4;
 
-    berthCapacity = (maxBerths > 0) ? maxBerths : 1;
-    berthCount = 0;
-    berths = new Berth[berthCapacity];
-
-    craneCapacity = (maxCranes > 0) ? maxCranes : 1;
-    craneCount = 0;
-    cranes = new Crane[craneCapacity];
-
-    truckInterval = 5;
-    urgencyWindow = 60;
-    yardBlockReported = false;
+PortController::PortController()
+    : ships(nullptr), shipCount(0), shipCapacity(0),
+      berths(nullptr), berthCount(0), berthCapacity(0),
+      cranes(nullptr), craneCount(0), craneCapacity(0),
+      currentTime(0), startTime(0), started(false),
+      truckInterval(DEFAULT_TRUCK_INTERVAL), yardBlockReported(false) {
+    lastError[0] = '\0';
+    allocateArrays();
 }
 
 PortController::~PortController() {
@@ -31,41 +23,23 @@ PortController::~PortController() {
     delete[] cranes;
 }
 
+void PortController::allocateArrays() {
+    shipCapacity = INITIAL_CAPACITY;
+    berthCapacity = INITIAL_CAPACITY;
+    craneCapacity = INITIAL_CAPACITY;
+    ships = new Ship[shipCapacity];
+    berths = new Berth[berthCapacity];
+    cranes = new Crane[craneCapacity];
+}
+
+void PortController::setError(const char* message) {
+    strncpy(lastError, message, ERROR_SIZE - 1);
+    lastError[ERROR_SIZE - 1] = '\0';
+}
+
 // ---------------------------------------------------------------------------
-// Setup
+// Growing arrays
 // ---------------------------------------------------------------------------
-
-bool PortController::addBerth(double maxLength, double depth) {
-    if (berthCount == berthCapacity) {
-        cout << "Error: the port has no room for another berth" << endl;
-        return false;
-    }
-    berths[berthCount] = Berth(berthCount + 1, maxLength, depth);
-    berthCount++;
-    return true;
-}
-
-bool PortController::addCrane(double maxLift, int minutesPerContainer) {
-    if (craneCount == craneCapacity) {
-        cout << "Error: the port has no room for another crane" << endl;
-        return false;
-    }
-    cranes[craneCount] = Crane(craneCount + 1, maxLift, minutesPerContainer);
-    craneCount++;
-    return true;
-}
-
-int PortController::addYardSlots(int count, int type, double maxWeight) {
-    return yard.addSlots(count, type, maxWeight);
-}
-
-void PortController::setTruckInterval(int minutes) {
-    truckInterval = (minutes > 0) ? minutes : 1;
-}
-
-void PortController::setUrgencyWindow(int minutes) {
-    urgencyWindow = (minutes >= 0) ? minutes : 0;
-}
 
 void PortController::growShips() {
     int newCapacity = shipCapacity * 2;
@@ -78,13 +52,43 @@ void PortController::growShips() {
     shipCapacity = newCapacity;
 }
 
+void PortController::growBerths() {
+    int newCapacity = berthCapacity * 2;
+    Berth* newBerths = new Berth[newCapacity];
+    for (int i = 0; i < berthCount; i++) {
+        newBerths[i] = berths[i];
+    }
+    delete[] berths;
+    berths = newBerths;
+    berthCapacity = newCapacity;
+}
+
+void PortController::growCranes() {
+    int newCapacity = craneCapacity * 2;
+    Crane* newCranes = new Crane[newCapacity];
+    for (int i = 0; i < craneCount; i++) {
+        newCranes[i] = cranes[i];
+    }
+    delete[] cranes;
+    cranes = newCranes;
+    craneCapacity = newCapacity;
+}
+
+// ---------------------------------------------------------------------------
+// Setup
+// ---------------------------------------------------------------------------
+
 bool PortController::registerShip(const Ship& ship) {
-    if (ship.getId() == 0) {
-        cout << "Error: cannot register a placeholder ship" << endl;
+    if (!ship.isValid()) {
+        setError("the ship has invalid values");
         return false;
     }
-    if (findShip(ship.getId()) != nullptr) {
-        cout << "Error: ship " << ship.getId() << " is already registered" << endl;
+    if (findShipIndex(ship.getId()) != -1) {
+        setError("this ship is already registered");
+        return false;
+    }
+    if (ship.getStatus() != Ship::SCHEDULED) {
+        setError("only ships that have not arrived yet can be registered");
         return false;
     }
     if (shipCount == shipCapacity) {
@@ -94,120 +98,270 @@ bool PortController::registerShip(const Ship& ship) {
     return true;
 }
 
-bool PortController::registerContainer(const Container& container) {
-    return registry.addContainer(container);
-}
-
-// Adds a container that arrives on the ship and must be unloaded here
-bool PortController::assignImportCargo(int shipId, int containerId) {
-    Ship* ship = findShip(shipId);
-    if (ship == nullptr) {
-        cout << "Error: unknown ship ID " << shipId << endl;
+bool PortController::registerBerth(const Berth& berth) {
+    if (!berth.isValid()) {
+        setError("the berth has invalid values");
         return false;
     }
-    const Container* container = registry.findContainer(containerId);
-    if (container == nullptr) {
-        cout << "Error: unknown container ID " << containerId << endl;
-        return false;
-    }
-    if (container->getStatus() != ON_SHIP) {
-        cout << "Error: container " << containerId << " is not aboard a ship" << endl;
-        return false;
-    }
-    if (isOnAnyShip(containerId)) {
-        cout << "Error: container " << containerId
-             << " is already assigned to a ship" << endl;
-        return false;
-    }
-    return ship->addContainer(containerId);
-}
-
-// Places a container (delivered by road) in the yard and adds it to the
-// ship's loading list. New containers start as ON_SHIP, so they are
-// moved straight into the yard here.
-bool PortController::assignExportCargo(int shipId, int containerId) {
-    Ship* ship = findShip(shipId);
-    if (ship == nullptr) {
-        cout << "Error: unknown ship ID " << shipId << endl;
-        return false;
-    }
-    Container* container = registry.findContainer(containerId);
-    if (container == nullptr) {
-        cout << "Error: unknown container ID " << containerId << endl;
-        return false;
-    }
-    if (isOnAnyShip(containerId)) {
-        cout << "Error: container " << containerId
-             << " is already assigned to a ship" << endl;
-        return false;
-    }
-    if (container->getStatus() != IN_YARD) {
-        if (!yard.storeContainer(*container)) {
-            cout << "Error: no yard slot for export container " << containerId << endl;
+    for (int i = 0; i < berthCount; i++) {
+        if (berths[i].getId() == berth.getId()) {
+            setError("this berth is already registered");
             return false;
         }
-        container->setStatus(IN_YARD);
     }
-    return ship->addLoadContainer(containerId);
+    if (berthCount == berthCapacity) {
+        growBerths();
+    }
+    berths[berthCount++] = berth;
+    return true;
+}
+
+bool PortController::registerCrane(const Crane& crane) {
+    if (!crane.isValid()) {
+        setError("the crane has invalid values");
+        return false;
+    }
+    if (findCrane(crane.getId()) != nullptr) {
+        setError("this crane is already registered");
+        return false;
+    }
+    if (craneCount == craneCapacity) {
+        growCranes();
+    }
+    cranes[craneCount++] = crane;
+    return true;
+}
+
+// The yard can only be resized while it is empty
+bool PortController::setupYard(int standard, int reefer, int hazard, double maxWeight) {
+    if (yard.isConfigured() && yard.getOccupiedSlots() > 0) {
+        setError("the yard already holds containers and cannot be resized");
+        return false;
+    }
+    if (!yard.setup(standard, reefer, hazard, maxWeight)) {
+        setError("invalid slot counts or slot weight limit");
+        return false;
+    }
+    return true;
+}
+
+bool PortController::setTruckInterval(int minutes) {
+    if (minutes < MIN_TRUCK_INTERVAL || minutes > MAX_TRUCK_INTERVAL) {
+        setError("truck interval is out of range");
+        return false;
+    }
+    truckInterval = minutes;
+    return true;
+}
+
+// Jobs are created when a ship berths, so cargo can only be added before that
+bool PortController::canStillTakeCargo(const Ship& ship) const {
+    return ship.getStatus() == Ship::SCHEDULED || ship.getStatus() == Ship::WAITING;
+}
+
+// Checks everything first, so nothing needs to be undone on failure:
+// 1. the ship exists and the container is valid and new
+// 2. the container is added to the registry
+// 3. its ID is added to the ship's manifest
+bool PortController::addContainerToShip(int shipId, const Container& container) {
+    int index = findShipIndex(shipId);
+    if (index == -1) {
+        setError("unknown ship ID");
+        return false;
+    }
+    if (!container.isValid()) {
+        setError("the container has invalid values");
+        return false;
+    }
+    if (registry.exists(container.getId())) {
+        setError("a container with this ID is already registered");
+        return false;
+    }
+    if (container.getStatus() != Container::ON_SHIP) {
+        setError("the container is not aboard a ship");
+        return false;
+    }
+    if (!canStillTakeCargo(ships[index])) {
+        setError("the ship is already berthed; cargo can no longer be added");
+        return false;
+    }
+    if (!registry.addContainer(container)) {
+        setError("the registry rejected the container");
+        return false;
+    }
+    return ships[index].addContainer(container.getId());
+}
+
+// An export container is delivered to the yard by road and loaded onto the
+// ship later. New containers start as ON_SHIP, so it is moved into the yard here.
+bool PortController::addExportContainer(int shipId, const Container& container) {
+    int index = findShipIndex(shipId);
+    if (index == -1) {
+        setError("unknown ship ID");
+        return false;
+    }
+    if (!container.isValid()) {
+        setError("the container has invalid values");
+        return false;
+    }
+    if (registry.exists(container.getId())) {
+        setError("a container with this ID is already registered");
+        return false;
+    }
+    if (!canStillTakeCargo(ships[index])) {
+        setError("the ship is already berthed; cargo can no longer be added");
+        return false;
+    }
+    if (!yard.isConfigured() || !yard.hasSpaceFor(container)) {
+        setError("no free compatible yard slot for this container");
+        return false;
+    }
+
+    registry.addContainer(container);
+    Container* stored = registry.findContainer(container.getId());
+    yard.storeContainer(*stored);
+    stored->setStatus(Container::IN_YARD);
+    return ships[index].addLoadContainer(container.getId());
 }
 
 bool PortController::scheduleCraneBreakdown(int craneId, int time, int repairMinutes) {
     Crane* crane = findCrane(craneId);
     if (crane == nullptr) {
-        cout << "Error: unknown crane ID " << craneId << endl;
+        setError("unknown crane ID");
         return false;
     }
-    crane->scheduleBreakdown(time, repairMinutes);
+    if (!crane->scheduleBreakdown(time, repairMinutes)) {
+        setError("invalid breakdown time or repair duration");
+        return false;
+    }
     return true;
+}
+
+// Removes everything so a new scenario can be entered. Uses the
+// assignment operators of the member objects to reset them.
+void PortController::clearScenario() {
+    delete[] ships;
+    delete[] berths;
+    delete[] cranes;
+    shipCount = 0;
+    berthCount = 0;
+    craneCount = 0;
+    allocateArrays();
+
+    registry = ContainerRegistry();
+    yard = ContainerYard();
+    scheduler = PortScheduler();
+    statistics = PortStatistics();
+    importQueue = Manifest();
+    currentTime = PortTime(0);
+    startTime = PortTime(0);
+    started = false;
+    truckInterval = DEFAULT_TRUCK_INTERVAL;
+    yardBlockReported = false;
+    lastError[0] = '\0';
 }
 
 // Manual departure request; rejected while handling work is unfinished
 bool PortController::requestDeparture(int shipId) {
-    Ship* ship = findShip(shipId);
-    if (ship == nullptr) {
-        cout << "Error: unknown ship ID " << shipId << endl;
+    int index = findShipIndex(shipId);
+    if (index == -1) {
+        setError("unknown ship ID");
         return false;
     }
-    int unfinished = scheduler.countUnfinishedJobs(shipId);
-    if (unfinished > 0) {
-        logTime();
-        cout << "Departure of " << ship->getName() << " refused: "
-             << unfinished << " handling jobs still unfinished" << endl;
+    Ship& ship = ships[index];
+    if (scheduler.countUnfinishedJobs(shipId) > 0) {
+        setError("the ship still has unfinished handling jobs");
         return false;
     }
-    if (ship->getStatus() == SHIP_OPERATING) {
-        ship->markReadyToDepart();
+    if (ship.getStatus() == Ship::OPERATING) {
+        ship.markReadyToDepart();
     }
-    if (ship->getStatus() != SHIP_READY_TO_DEPART) {
-        logTime();
-        cout << "Departure of " << ship->getName() << " refused: ship is "
-             << Ship::statusToString(ship->getStatus()) << endl;
+    if (ship.getStatus() != Ship::READY_TO_DEPART) {
+        setError("the ship is not in a state where it can depart");
         return false;
     }
-    departShip(*ship);
+    departShip(ship);
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Read-only information
+// ---------------------------------------------------------------------------
+
+const char* PortController::getLastError() const {
+    return lastError;
+}
+
+int PortController::getShipCount() const {
+    return shipCount;
+}
+
+int PortController::getBerthCount() const {
+    return berthCount;
+}
+
+int PortController::getCraneCount() const {
+    return craneCount;
+}
+
+bool PortController::isYardConfigured() const {
+    return yard.isConfigured();
+}
+
+bool PortController::isReadyToRun() const {
+    return yard.isConfigured() && berthCount > 0 && craneCount > 0 && shipCount > 0;
+}
+
+bool PortController::hasStarted() const {
+    return started;
+}
+
+int PortController::getShipIdAt(int index) const {
+    if (index < 0 || index >= shipCount) {
+        return -1;
+    }
+    return ships[index].getId();
+}
+
+int PortController::getEarliestArrival() const {
+    int earliest = -1;
+    for (int i = 0; i < shipCount; i++) {
+        if (earliest == -1 || ships[i].getArrivalTime() < earliest) {
+            earliest = ships[i].getArrivalTime();
+        }
+    }
+    return earliest;
+}
+
+int PortController::getTruckInterval() const {
+    return truckInterval;
+}
+
+const PortTime& PortController::getCurrentTime() const {
+    return currentTime;
+}
+
+void PortController::displayShipList() const {
+    for (int i = 0; i < shipCount; i++) {
+        cout << "  " << (i + 1) << ". " << ships[i].getName()
+             << " (ID " << ships[i].getId() << ", "
+             << Ship::statusToString(ships[i].getStatus()) << ", "
+             << ships[i].getManifest().getCount() << " to unload, "
+             << ships[i].getLoadingList().getCount() << " to load)" << endl;
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Lookup helpers
 // ---------------------------------------------------------------------------
 
-Ship* PortController::findShip(int shipId) {
+int PortController::findShipIndex(int shipId) const {
     for (int i = 0; i < shipCount; i++) {
         if (ships[i].getId() == shipId) {
-            return &ships[i];
+            return i;
         }
     }
-    return nullptr;
-}
-
-const Ship* PortController::findShip(int shipId) const {
-    for (int i = 0; i < shipCount; i++) {
-        if (ships[i].getId() == shipId) {
-            return &ships[i];
-        }
-    }
-    return nullptr;
+    return -1;
 }
 
 Crane* PortController::findCrane(int craneId) {
@@ -250,22 +404,12 @@ bool PortController::anyBerthFits(const Ship& ship) const {
     return false;
 }
 
-bool PortController::isOnAnyShip(int containerId) const {
-    for (int i = 0; i < shipCount; i++) {
-        if (ships[i].getManifest().contains(containerId) ||
-            ships[i].getLoadingList().contains(containerId)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 // Fastest available crane that can lift the container. Returns an index or -1.
 int PortController::findBestCrane(const Container& container) const {
     int best = -1;
     for (int i = 0; i < craneCount; i++) {
         if (cranes[i].isAvailable() && cranes[i].canHandle(container) &&
-            (best == -1 || cranes[i].getHandlingMinutes() < cranes[best].getHandlingMinutes())) {
+            (best == -1 || cranes[i].getHandlingTime() < cranes[best].getHandlingTime())) {
             best = i;
         }
     }
@@ -283,7 +427,7 @@ void PortController::logTime() const {
 void PortController::processArrivals() {
     for (int i = 0; i < shipCount; i++) {
         Ship& ship = ships[i];
-        if (ship.getStatus() != SHIP_SCHEDULED ||
+        if (ship.getStatus() != Ship::SCHEDULED ||
             currentTime < PortTime(ship.getArrivalTime())) {
             continue;
         }
@@ -308,32 +452,31 @@ void PortController::processArrivals() {
 
 // Repeatedly gives a berth to the waiting ship with the earliest deadline
 void PortController::allocateBerths() {
-    bool assigned = true;
-    while (assigned) {
-        assigned = false;
+    while (true) {
         int bestShip = -1;
         for (int i = 0; i < shipCount; i++) {
-            if (ships[i].getStatus() == SHIP_WAITING && findBestBerth(ships[i]) != -1 &&
+            if (ships[i].getStatus() == Ship::WAITING && findBestBerth(ships[i]) != -1 &&
                 (bestShip == -1 || ships[i].getDeadline() < ships[bestShip].getDeadline())) {
                 bestShip = i;
             }
         }
         if (bestShip == -1) {
-            break;
+            return;
         }
 
         Ship& ship = ships[bestShip];
         Berth& berth = berths[findBestBerth(ship)];
-        if (berth.assignShip(ship) &&
-            ship.markBerthed(berth.getId(), currentTime.getMinutes())) {
-            logTime();
-            cout << ship.getName() << " berthed at berth " << berth.getId();
-            if (ship.getWaitingTime() > 0) {
-                cout << " after waiting " << ship.getWaitingTime() << " min";
-            }
-            cout << endl;
-            assigned = true;
+        if (!berth.assignShip(ship.getId()) ||
+            !ship.markBerthed(berth.getId(), currentTime.getMinutes())) {
+            return;
         }
+        statistics.recordWaitingTime(ship.getWaitingTime());
+        logTime();
+        cout << ship.getName() << " berthed at berth " << berth.getId();
+        if (ship.getWaitingTime() > 0) {
+            cout << " after waiting " << ship.getWaitingTime() << " min";
+        }
+        cout << endl;
     }
 }
 
@@ -341,17 +484,21 @@ void PortController::allocateBerths() {
 void PortController::createHandlingJobs() {
     for (int i = 0; i < shipCount; i++) {
         Ship& ship = ships[i];
-        if (ship.getStatus() != SHIP_BERTHED) {
+        if (ship.getStatus() != Ship::BERTHED) {
             continue;
         }
 
         int created = 0;
         for (int pass = 0; pass < 2; pass++) {
-            int jobType = (pass == 0) ? JOB_UNLOAD : JOB_LOAD;
-            const Manifest& list = (pass == 0) ? ship.getManifest() : ship.getLoadingList();
+            int jobType = HandlingJob::UNLOAD;
+            const Manifest* list = &ship.getManifest();
+            if (pass == 1) {
+                jobType = HandlingJob::LOAD;
+                list = &ship.getLoadingList();
+            }
 
-            for (int k = 0; k < list.getCount(); k++) {
-                int containerId = list[k];
+            for (int k = 0; k < list->getCount(); k++) {
+                int containerId = (*list)[k];
                 const Container* container = registry.findContainer(containerId);
                 if (container == nullptr) {
                     logTime();
@@ -359,12 +506,14 @@ void PortController::createHandlingJobs() {
                     continue;
                 }
 
-                HandlingJob job(ship.getId(), containerId, jobType, ship.getDeadline());
-
-                bool liftable = false;
+                // Estimate with the fastest crane that can lift it; the real
+                // duration is set when a crane is assigned
+                int estimate = 0;
                 for (int c = 0; c < craneCount; c++) {
                     if (cranes[c].canHandle(*container)) {
-                        liftable = true;
+                        if (estimate == 0 || cranes[c].getHandlingTime() < estimate) {
+                            estimate = cranes[c].getHandlingTime();
+                        }
                     } else {
                         logTime();
                         cout << "  Crane " << cranes[c].getId() << " cannot lift container "
@@ -372,8 +521,12 @@ void PortController::createHandlingJobs() {
                              << cranes[c].getMaximumLiftWeight() << " t limit)" << endl;
                     }
                 }
-                bool storable = (jobType == JOB_LOAD) || yard.supports(*container);
+                bool liftable = (estimate > 0);
+                bool storable = (jobType == HandlingJob::LOAD) || yard.supports(*container);
 
+                HandlingJob job(ship.getId(), containerId, jobType,
+                                HandlingJob::NORMAL_PRIORITY, ship.getDeadline(),
+                                liftable ? estimate : 1);
                 if (!liftable || !storable) {
                     job.cancel();
                     logTime();
@@ -381,8 +534,9 @@ void PortController::createHandlingJobs() {
                          << (!liftable ? "no crane can lift" : "no yard slot can ever hold")
                          << " container " << containerId << endl;
                 }
-                scheduler.addJob(job);
-                created++;
+                if (scheduler.addJob(job)) {
+                    created++;
+                }
             }
         }
 
@@ -395,16 +549,16 @@ void PortController::createHandlingJobs() {
 // Goes through jobs in scheduling order and gives each one the fastest
 // suitable free crane. Jobs whose resources are not ready are skipped.
 void PortController::assignCraneJobs() {
-    int raised = scheduler.prioritizeJobs(currentTime.getMinutes(), urgencyWindow);
+    int raised = scheduler.prioritizeJobs(currentTime.getMinutes(), URGENCY_WINDOW);
     if (raised > 0) {
         logTime();
         cout << raised << " jobs raised to URGENT (deadline within "
-             << urgencyWindow << " min)" << endl;
+             << URGENCY_WINDOW << " min)" << endl;
     }
 
     bool yardBlocked = false;
     for (int i = 0; i < scheduler.getJobCount(); i++) {
-        HandlingJob* job = scheduler.getJobAt(i);
+        HandlingJob* job = scheduler.getJob(i);
         if (!job->isPending()) {
             continue;
         }
@@ -414,7 +568,7 @@ void PortController::assignCraneJobs() {
             continue;
         }
 
-        if (job->getType() == JOB_UNLOAD && !yard.hasSpaceFor(*container)) {
+        if (job->getJobType() == HandlingJob::UNLOAD && !yard.hasSpaceFor(*container)) {
             if (!yardBlockReported) {
                 logTime();
                 cout << "Yard has no free " << Container::typeToString(container->getType())
@@ -439,80 +593,86 @@ void PortController::assignCraneJobs() {
 }
 
 void PortController::startJob(HandlingJob& job, Crane& crane, Container& container) {
-    if (!job.assignCrane(crane.getId(), crane.getHandlingMinutes())) {
-        return;
-    }
-    if (job.getType() == JOB_UNLOAD) {
+    if (job.getJobType() == HandlingJob::UNLOAD) {
         // Reserve the yard slot now so it cannot be taken mid-lift
         if (!yard.storeContainer(container)) {
             return;
         }
     } else {
-        container.setStatus(ASSIGNED_TO_SHIP);
+        container.setStatus(Container::ASSIGNED_TO_SHIP);
     }
+    job.assignCrane(crane.getId(), crane.getHandlingTime());
     crane.assignJob(job.getId());
     job.markStarted(currentTime.getMinutes());
 }
 
 void PortController::finishJob(HandlingJob& job, Crane& crane) {
     Container* container = registry.findContainer(job.getContainerId());
-    crane.completeJob();
+    crane.completeJob(job.getDuration());
     job.markCompleted(currentTime.getMinutes());
 
-    if (job.getType() == JOB_UNLOAD) {
-        container->setStatus(IN_YARD);
+    if (job.getJobType() == HandlingJob::UNLOAD) {
+        container->setStatus(Container::IN_YARD);
         importQueue.addContainer(container->getId());
     } else {
         yard.retrieveContainer(container->getId());
-        container->setStatus(ON_SHIP);
+        container->setStatus(Container::ON_SHIP);
     }
-    statistics.recordContainerHandled(job.getType());
+    statistics.recordContainerHandled(job.getJobType());
+}
+
+// Takes a crane out of service now and safely returns its job to the queue
+bool PortController::breakDownCrane(int craneId, int repairMinutes) {
+    Crane* crane = findCrane(craneId);
+    if (crane == nullptr || !crane->isInService() || !Crane::isValidRepairTime(repairMinutes)) {
+        setError("unknown crane, crane already out of service, or bad repair time");
+        return false;
+    }
+
+    int interruptedId = (crane->getStatus() == Crane::BUSY) ? crane->getCurrentJobId() : -1;
+    crane->setOutOfService(currentTime.getMinutes() + repairMinutes);
+    logTime();
+    cout << "BREAKDOWN: crane " << crane->getId() << " out of service until "
+         << PortTime(crane->getBackInServiceTime()) << endl;
+
+    HandlingJob* job = scheduler.findJob(interruptedId);
+    statistics.recordBreakdown(job != nullptr);
+    if (job == nullptr) {
+        return true;
+    }
+
+    // Undo the partial work so the job can be safely restarted
+    Container* container = registry.findContainer(job->getContainerId());
+    if (job->getJobType() == HandlingJob::UNLOAD) {
+        yard.retrieveContainer(container->getId());
+    } else {
+        container->setStatus(Container::IN_YARD);
+    }
+    job->interrupt();
+    logTime();
+    cout << "  Job #" << job->getId() << " (" << HandlingJob::typeToString(job->getJobType())
+         << " container " << container->getId() << ") returned to the queue" << endl;
+    return true;
 }
 
 void PortController::processCraneEvents() {
     for (int i = 0; i < craneCount; i++) {
         Crane& crane = cranes[i];
-
         if (crane.isRepairDue(currentTime.getMinutes())) {
             crane.repair();
             logTime();
             cout << "Crane " << crane.getId() << " repaired and back in service" << endl;
         }
-
-        if (!crane.isBreakdownDue(currentTime.getMinutes())) {
-            continue;
+        if (crane.isBreakdownDue(currentTime.getMinutes())) {
+            breakDownCrane(crane.getId(), crane.getRepairMinutes());
         }
-        // 0 = use the repair time given to scheduleBreakdown()
-        int interruptedId = crane.setOutOfService(currentTime.getMinutes(), 0);
-        int repairAt = crane.getBackInServiceTime();
-        logTime();
-        cout << "BREAKDOWN: crane " << crane.getId() << " out of service until "
-             << PortTime(repairAt) << endl;
-
-        HandlingJob* job = scheduler.findJob(interruptedId);
-        statistics.recordBreakdown(job != nullptr);
-        if (job == nullptr) {
-            continue;
-        }
-
-        // Undo the partial work so the job can be safely restarted
-        Container* container = registry.findContainer(job->getContainerId());
-        if (job->getType() == JOB_UNLOAD) {
-            yard.retrieveContainer(container->getId());
-        } else {
-            container->setStatus(IN_YARD);
-        }
-        job->interrupt();
-        logTime();
-        cout << "  Job #" << job->getId() << " (" << HandlingJob::typeToString(job->getType())
-             << " container " << container->getId() << ") returned to the queue" << endl;
     }
 }
 
 void PortController::progressJobs() {
     for (int i = 0; i < craneCount; i++) {
         Crane& crane = cranes[i];
-        if (crane.getStatus() != CRANE_BUSY) {
+        if (crane.getStatus() != Crane::BUSY) {
             continue;
         }
         HandlingJob* job = scheduler.findJob(crane.getCurrentJobId());
@@ -530,8 +690,8 @@ void PortController::departShip(Ship& ship) {
     if (berth != nullptr) {
         berth->releaseShip();
     }
-    statistics.recordShipDeparture(ship.getTurnaroundTime(), ship.getWaitingTime(),
-                                   ship.getDelay());
+    statistics.recordShipDeparture(ship.getTurnaroundTime(), ship.isLate());
+    statistics.recordDelay(ship.getDelay());
     logTime();
     cout << ship.getName() << " departed (turnaround " << ship.getTurnaroundTime()
          << " min)";
@@ -545,7 +705,7 @@ void PortController::departShip(Ship& ship) {
 void PortController::processDepartures() {
     for (int i = 0; i < shipCount; i++) {
         Ship& ship = ships[i];
-        if (ship.getStatus() == SHIP_OPERATING &&
+        if (ship.getStatus() == Ship::OPERATING &&
             scheduler.countUnfinishedJobs(ship.getId()) == 0) {
             ship.markReadyToDepart();
             departShip(ship);
@@ -561,7 +721,7 @@ void PortController::dispatchTrucks() {
     int containerId = importQueue[0];
     Container* container = registry.findContainer(containerId);
     if (container != nullptr && yard.retrieveContainer(containerId)) {
-        container->setStatus(DELIVERED);
+        container->setStatus(Container::DELIVERED);
         statistics.recordDispatch();
     }
     importQueue.removeContainer(containerId);
@@ -571,7 +731,7 @@ void PortController::recordUtilization() {
     int busy = 0;
     int inService = 0;
     for (int i = 0; i < craneCount; i++) {
-        if (cranes[i].getStatus() == CRANE_BUSY) {
+        if (cranes[i].getStatus() == Crane::BUSY) {
             busy++;
         }
         if (cranes[i].isInService()) {
@@ -584,7 +744,8 @@ void PortController::recordUtilization() {
             occupied++;
         }
     }
-    statistics.recordMinute(busy, inService, occupied, berthCount);
+    statistics.recordCraneTime(busy, inService);
+    statistics.recordBerthTime(occupied, berthCount);
 }
 
 // One simulated minute
@@ -607,19 +768,31 @@ void PortController::updateSimulation(int duration) {
     }
 }
 
-// Runs until no more progress is possible. Returns minutes simulated.
-int PortController::runUntilComplete(int maxDuration) {
-    int minutes = 0;
-    while (!isFinished() && minutes < maxDuration) {
+// Runs until every ship is done or the end time is reached. The first run
+// starts the clock at the earliest ship arrival; later runs continue from
+// where the previous one stopped.
+void PortController::runSimulation(int endTimeMinutes) {
+    if (!isReadyToRun()) {
+        setError("the scenario is not complete");
+        return;
+    }
+    if (!started) {
+        currentTime = PortTime(getEarliestArrival());
+        startTime = currentTime;
+        started = true;
+    }
+
+    PortTime endTime(endTimeMinutes);
+    while (currentTime < endTime && !isFinished()) {
         processNextEvent();
-        minutes++;
     }
-    if (!isFinished()) {
-        logTime();
-        cout << "Simulation stopped after the " << maxDuration
-             << " minute limit" << endl;
+
+    logTime();
+    if (isFinished()) {
+        cout << "Simulation complete: no further work is possible" << endl;
+    } else {
+        cout << "Simulation paused at the chosen end time" << endl;
     }
-    return minutes;
 }
 
 // Finished when every ship has departed, except ships that no berth can
@@ -627,10 +800,10 @@ int PortController::runUntilComplete(int maxDuration) {
 bool PortController::isFinished() const {
     for (int i = 0; i < shipCount; i++) {
         int status = ships[i].getStatus();
-        if (status == SHIP_DEPARTED) {
+        if (status == Ship::DEPARTED) {
             continue;
         }
-        if (status == SHIP_WAITING && !anyBerthFits(ships[i])) {
+        if (status == Ship::WAITING && !anyBerthFits(ships[i])) {
             continue;
         }
         return false;
@@ -638,56 +811,63 @@ bool PortController::isFinished() const {
     return true;
 }
 
-const PortTime& PortController::getCurrentTime() const {
-    return currentTime;
-}
-
 // ---------------------------------------------------------------------------
 // Reports
 // ---------------------------------------------------------------------------
 
 void PortController::displayPortStatus() const {
-    cout << endl << "========== Port status at " << currentTime << " ==========" << endl;
-    cout << "Ships:" << endl;
+    cout << endl << "========== Port status";
+    if (started) {
+        cout << " at " << currentTime;
+    } else {
+        cout << " (simulation not started)";
+    }
+    cout << " ==========" << endl;
+
+    cout << "Ships:" << (shipCount == 0 ? " none" : "") << endl;
     for (int i = 0; i < shipCount; i++) {
         const Ship& ship = ships[i];
-        cout << "  " << left << setw(18) << ship.getName() << right
+        cout << "  " << left << setw(20) << ship.getName() << right
              << Ship::statusToString(ship.getStatus());
         if (ship.getBerthId() != -1) {
             cout << " at berth " << ship.getBerthId();
         }
+        cout << " (arrives " << PortTime(ship.getArrivalTime()) << ", deadline "
+             << PortTime(ship.getDeadline()) << ", " << ship.getManifest().getCount()
+             << " to unload, " << ship.getLoadingList().getCount() << " to load)";
         int unfinished = scheduler.countUnfinishedJobs(ship.getId());
         if (unfinished > 0) {
             cout << ", " << unfinished << " jobs left";
         }
         cout << endl;
     }
-    cout << "Berths:" << endl;
+    cout << "Berths:" << (berthCount == 0 ? " none" : "") << endl;
     for (int i = 0; i < berthCount; i++) {
         cout << "  ";
         berths[i].display();
     }
-    cout << "Cranes:" << endl;
+    cout << "Cranes:" << (craneCount == 0 ? " none" : "") << endl;
     for (int i = 0; i < craneCount; i++) {
         cout << "  ";
         cranes[i].display();
     }
     yard.displayYard();
-    cout << "Containers waiting for trucks: " << importQueue.getCount() << endl;
-    cout << "Pending jobs: " << scheduler.countPendingJobs() << endl;
-    cout << "==========================================" << endl << endl;
+    cout << "Truck pickup every " << truckInterval << " min, "
+         << importQueue.getCount() << " containers waiting" << endl;
+    cout << "Pending jobs: " << scheduler.getPendingCount() << endl;
+    cout << "==========================================" << endl;
 }
 
 void PortController::generateFinalReport() const {
     cout << endl << "================ FINAL REPORT ================" << endl;
-    cout << left << setw(4) << "ID" << setw(18) << "Ship" << right
+    cout << left << setw(4) << "ID" << setw(20) << "Ship" << right
          << setw(8) << "Arrived" << setw(8) << "Berthed" << setw(9) << "Departed"
          << setw(9) << "Deadline" << setw(6) << "Wait" << setw(11) << "Turnaround"
          << "  Result" << endl;
 
     for (int i = 0; i < shipCount; i++) {
         const Ship& ship = ships[i];
-        cout << left << setw(4) << ship.getId() << setw(18) << ship.getName() << right;
+        cout << left << setw(4) << ship.getId() << setw(20) << ship.getName() << right;
 
         if (ship.getActualArrivalTime() >= 0) {
             cout << "   " << PortTime(ship.getActualArrivalTime());
@@ -699,7 +879,7 @@ void PortController::generateFinalReport() const {
         } else {
             cout << setw(8) << "-";
         }
-        if (ship.getStatus() == SHIP_DEPARTED) {
+        if (ship.getStatus() == Ship::DEPARTED) {
             cout << "    " << PortTime(ship.getActualDepartureTime());
         } else {
             cout << setw(9) << "-";
@@ -711,13 +891,13 @@ void PortController::generateFinalReport() const {
         } else {
             cout << setw(6) << "-";
         }
-        if (ship.getStatus() == SHIP_DEPARTED) {
+        if (ship.getStatus() == Ship::DEPARTED) {
             cout << setw(11) << ship.getTurnaroundTime();
         } else {
             cout << setw(11) << "-";
         }
 
-        if (ship.getStatus() != SHIP_DEPARTED) {
+        if (ship.getStatus() != Ship::DEPARTED) {
             cout << "  NOT DEPARTED (" << Ship::statusToString(ship.getStatus()) << ")";
         } else if (ship.isLate()) {
             cout << "  LATE +" << ship.getDelay() << " min";
@@ -728,6 +908,10 @@ void PortController::generateFinalReport() const {
     }
     cout << "(times in minutes; ships not departed are excluded from averages)" << endl;
     cout << endl;
+    if (started) {
+        cout << "Simulated period: " << startTime << " to " << currentTime
+             << " (" << (currentTime - startTime) << " min)" << endl;
+    }
     statistics.generateReport();
     cout << endl;
     yard.displayYard();

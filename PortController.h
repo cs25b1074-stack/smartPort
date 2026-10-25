@@ -12,6 +12,13 @@
 #include "Manifest.h"
 
 class PortController {
+public:
+    static const int MIN_TRUCK_INTERVAL = 1;
+    static const int MAX_TRUCK_INTERVAL = 120;
+    static const int DEFAULT_TRUCK_INTERVAL = 10;
+    static const int URGENCY_WINDOW = 60;       // minutes before a deadline
+    static const int ERROR_SIZE = 120;
+
 private:
     Ship* ships;
     int shipCount;
@@ -31,21 +38,27 @@ private:
     PortStatistics statistics;
     PortTime currentTime;
 
+    PortTime startTime;         // when the first run began
+    bool started;
     Manifest importQueue;       // unloaded containers waiting for a truck
     int truckInterval;          // minutes between road dispatches
-    int urgencyWindow;          // minutes before a deadline that jobs become urgent
     bool yardBlockReported;     // avoids repeating the "yard full" message
+    char lastError[ERROR_SIZE]; // reason the last setup call failed
 
-    Ship* findShip(int shipId);
-    const Ship* findShip(int shipId) const;
+    void growShips();
+    void growBerths();
+    void growCranes();
+    void allocateArrays();
+    void setError(const char* message);
+
+    int findShipIndex(int shipId) const;
     Crane* findCrane(int craneId);
     Berth* findBerth(int berthId);
     int findBestBerth(const Ship& ship) const;
     bool anyBerthFits(const Ship& ship) const;
-    bool isOnAnyShip(int containerId) const;
     int findBestCrane(const Container& container) const;
+    bool canStillTakeCargo(const Ship& ship) const;
 
-    void growShips();
     void logTime() const;
     void startJob(HandlingJob& job, Crane& crane, Container& container);
     void finishJob(HandlingJob& job, Crane& crane);
@@ -57,38 +70,52 @@ private:
     void dispatchTrucks();
     void recordUtilization();
 
+    // Copying a whole port is not needed, so copying is disabled by
+    // declaring these private and never defining them
+    PortController(const PortController&);
+    PortController& operator=(const PortController&);
+
 public:
-    PortController(int startMinutes, int yardCapacity,
-                   int maxBerths, int maxCranes);
+    PortController();
     ~PortController();
 
-    // A port owns unique physical resources, so copying is not allowed
-    PortController(const PortController&) = delete;
-    PortController& operator=(const PortController&) = delete;
-
-    bool addBerth(double maxLength, double depth);
-    bool addCrane(double maxLift, int minutesPerContainer);
-    int addYardSlots(int count, int type, double maxWeight);
-    void setTruckInterval(int minutes);
-    void setUrgencyWindow(int minutes);
-
+    // Setup: every function returns false and changes nothing for invalid input
     bool registerShip(const Ship& ship);
-    bool registerContainer(const Container& container);
-    bool assignImportCargo(int shipId, int containerId);
-    bool assignExportCargo(int shipId, int containerId);
+    bool registerBerth(const Berth& berth);
+    bool registerCrane(const Crane& crane);
+    bool setupYard(int standard, int reefer, int hazard, double maxWeight);
+    bool setTruckInterval(int minutes);
+    bool addContainerToShip(int shipId, const Container& container);
+    bool addExportContainer(int shipId, const Container& container);
     bool scheduleCraneBreakdown(int craneId, int time, int repairMinutes);
-    bool requestDeparture(int shipId);
+    void clearScenario();
 
+    // Read-only information for the menus
+    const char* getLastError() const;
+    int getShipCount() const;
+    int getBerthCount() const;
+    int getCraneCount() const;
+    bool isYardConfigured() const;
+    bool isReadyToRun() const;
+    bool hasStarted() const;
+    int getShipIdAt(int index) const;
+    int getEarliestArrival() const;
+    int getTruckInterval() const;
+    const PortTime& getCurrentTime() const;
+    void displayShipList() const;
+
+    // Simulation
     void processArrivals();
     void allocateBerths();
     void createHandlingJobs();
     void assignCraneJobs();
     void processNextEvent();
     void updateSimulation(int duration);
-    int runUntilComplete(int maxDuration);
+    void runSimulation(int endTimeMinutes);
     bool isFinished() const;
+    bool breakDownCrane(int craneId, int repairMinutes);
+    bool requestDeparture(int shipId);
 
-    const PortTime& getCurrentTime() const;
     void displayPortStatus() const;
     void generateFinalReport() const;
 };

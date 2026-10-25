@@ -3,8 +3,9 @@
 
 using namespace std;
 
+// A bad capacity is corrected rather than rejected, so the scheduler is always usable
 PortScheduler::PortScheduler(int initialCapacity) {
-    jobCapacity = (initialCapacity > 0) ? initialCapacity : 20;
+    jobCapacity = (initialCapacity >= 1) ? initialCapacity : 10;
     jobCount = 0;
     jobs = new HandlingJob[jobCapacity];
 }
@@ -50,15 +51,16 @@ void PortScheduler::grow() {
     jobCapacity = newCapacity;
 }
 
-void PortScheduler::addJob(const HandlingJob& job) {
-    if (findJob(job.getId()) != nullptr) {
-        cout << "Error: job " << job.getId() << " is already scheduled" << endl;
-        return;
+// Rejects invalid jobs and duplicate IDs
+bool PortScheduler::addJob(const HandlingJob& job) {
+    if (!job.isValid() || findJob(job.getId()) != nullptr) {
+        return false;
     }
     if (jobCount == jobCapacity) {
         grow();
     }
     jobs[jobCount++] = job;
+    return true;
 }
 
 // Returns the index of the pending job that should go next, or -1.
@@ -73,19 +75,8 @@ int PortScheduler::selectNextJob() const {
     return best;
 }
 
-// Raises jobs whose deadline is within the urgency window to URGENT,
-// then sorts all jobs into scheduling order (insertion sort with operator<).
-// Returns how many jobs were newly raised.
-int PortScheduler::prioritizeJobs(int currentTime, int urgencyWindow) {
-    int raised = 0;
-    for (int i = 0; i < jobCount; i++) {
-        if (jobs[i].isPending() && jobs[i].getDeadline() - currentTime <= urgencyWindow) {
-            if (jobs[i].raisePriority(PRIORITY_URGENT)) {
-                raised++;
-            }
-        }
-    }
-
+// Sorts all jobs into scheduling order (insertion sort with operator<)
+void PortScheduler::prioritizeJobs() {
     for (int i = 1; i < jobCount; i++) {
         HandlingJob key = jobs[i];
         int j = i - 1;
@@ -95,10 +86,25 @@ int PortScheduler::prioritizeJobs(int currentTime, int urgencyWindow) {
         }
         jobs[j + 1] = key;
     }
+}
+
+// Raises jobs whose deadline is within the urgency window to URGENT, then
+// sorts. Returns how many jobs were newly raised.
+int PortScheduler::prioritizeJobs(int currentTime, int urgencyWindow) {
+    int raised = 0;
+    for (int i = 0; i < jobCount; i++) {
+        if (jobs[i].isPending() && jobs[i].getDeadline() - currentTime <= urgencyWindow) {
+            if (jobs[i].raisePriority(HandlingJob::URGENT_PRIORITY)) {
+                raised++;
+            }
+        }
+    }
+    prioritizeJobs();
     return raised;
 }
 
-HandlingJob* PortScheduler::getJobAt(int index) {
+// Returns nullptr for a bad index
+HandlingJob* PortScheduler::getJob(int index) {
     if (index < 0 || index >= jobCount) {
         return nullptr;
     }
@@ -127,7 +133,7 @@ int PortScheduler::getJobCount() const {
     return jobCount;
 }
 
-int PortScheduler::countPendingJobs() const {
+int PortScheduler::getPendingCount() const {
     int pending = 0;
     for (int i = 0; i < jobCount; i++) {
         if (jobs[i].isPending()) {
@@ -147,17 +153,8 @@ int PortScheduler::countUnfinishedJobs(int shipId) const {
     return unfinished;
 }
 
-bool PortScheduler::hasJobsForShip(int shipId) const {
-    for (int i = 0; i < jobCount; i++) {
-        if (jobs[i].getShipId() == shipId) {
-            return true;
-        }
-    }
-    return false;
-}
-
 void PortScheduler::displayPendingJobs() const {
-    int pending = countPendingJobs();
+    int pending = getPendingCount();
     cout << "Pending jobs: " << pending << endl;
     if (pending == 0) {
         return;

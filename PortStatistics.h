@@ -16,24 +16,25 @@ private:
     int totalCraneAvailableMinutes;     // crane-minutes while in service
     int totalBerthOccupiedMinutes;
     int totalBerthAvailableMinutes;
-    int simulatedMinutes;
     int craneBreakdowns;
     int jobsInterrupted;
 
 public:
     PortStatistics();
 
-    void recordShipDeparture(int turnaround, int waiting, int delay);
+    void recordShipDeparture(int turnaroundMinutes, bool wasLate);
+    void recordWaitingTime(int minutes);
+    void recordDelay(int minutes);
+    void recordContainerHandled();
     void recordContainerHandled(int jobType);
     void recordDispatch();
-    void recordMinute(int busyCranes, int inServiceCranes,
-                      int occupiedBerths, int totalBerths);
+    void recordCraneTime(int busyMinutes, int availableMinutes);
+    void recordBerthTime(int occupiedMinutes, int availableMinutes);
     void recordBreakdown(bool interruptedJob);
 
     int getShipsCompleted() const;
     int getDelayedShips() const;
     int getContainersHandled() const;
-    int getSimulatedMinutes() const;
 
     double getAverageTurnaroundTime() const;
     double getAverageWaitingTime() const;

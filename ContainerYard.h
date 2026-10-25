@@ -4,20 +4,26 @@
 #include "YardSlot.h"
 
 class ContainerYard {
+public:
+    static const int MAX_TOTAL_SLOTS = 500;
+
 private:
     YardSlot* slots;
     int slotCount;
-    int slotCapacity;
+    bool configured;            // true after a successful setup()
+
+    int countSlotsOfType(int containerType) const;
 
 public:
-    ContainerYard(int capacity = 50);
+    ContainerYard();
     ContainerYard(const ContainerYard& other);
     ContainerYard& operator=(const ContainerYard& other);
     ~ContainerYard();
 
-    bool addSlot(int type, double maxWeight);
-    int addSlots(int count, int type, double maxWeight);
+    bool setup(int standardSlots, int reeferSlots, int hazardSlots, double maxWeightPerSlot);
+    static bool isValidSlotCounts(int standard, int reefer, int hazard);
 
+    bool isConfigured() const;
     bool storeContainer(const Container& container);
     bool retrieveContainer(int containerId);
     bool hasSpaceFor(const Container& container) const;
@@ -27,7 +33,7 @@ public:
     int findCompatibleSlot(int containerType, double weight) const;
     int findContainer(int containerId) const;
 
-    int getSlotCount() const;
+    int getTotalSlots() const;
     int getOccupiedSlots() const;
     int getFreeSlots() const;
     int getFreeSlots(int containerType) const;

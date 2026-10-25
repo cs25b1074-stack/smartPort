@@ -4,13 +4,21 @@
 
 using namespace std;
 
+// A time can never be negative
 PortTime::PortTime(int minutes) {
     totalMinutes = (minutes >= 0) ? minutes : 0;
 }
 
+// An invalid clock value gives 00:00
 PortTime::PortTime(int hours, int minutes) {
-    int total = hours * MINUTES_PER_HOUR + minutes;
-    totalMinutes = (total >= 0) ? total : 0;
+    totalMinutes = 0;
+    if (isValidClock(hours, minutes)) {
+        totalMinutes = hours * MINUTES_PER_HOUR + minutes;
+    }
+}
+
+bool PortTime::isValidClock(int hours, int minutes) {
+    return hours >= 0 && minutes >= 0 && minutes <= 59;
 }
 
 int PortTime::getMinutes() const {
@@ -36,10 +44,10 @@ PortTime PortTime::operator++(int) {
     return old;
 }
 
+// Negative values are ignored so time never runs backwards
 PortTime& PortTime::operator+=(int minutes) {
-    totalMinutes += minutes;
-    if (totalMinutes < 0) {
-        totalMinutes = 0;
+    if (minutes > 0) {
+        totalMinutes += minutes;
     }
     return *this;
 }

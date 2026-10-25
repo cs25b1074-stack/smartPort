@@ -6,7 +6,7 @@
 const int MINUTES_PER_HOUR = 60;
 const int MINUTES_PER_DAY = 1440;
 
-// Simulation time stored as minutes since 00:00 on day 1
+// Simulation time stored as minutes since 00:00 on day 1 (08:30 = 510)
 class PortTime {
 private:
     int totalMinutes;
@@ -14,6 +14,8 @@ private:
 public:
     PortTime(int minutes = 0);
     PortTime(int hours, int minutes);
+
+    static bool isValidClock(int hours, int minutes);
 
     int getMinutes() const;
     int getHour() const;

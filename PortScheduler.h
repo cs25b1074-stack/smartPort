@@ -12,23 +12,23 @@ private:
     void grow();
 
 public:
-    PortScheduler(int initialCapacity = 20);
+    PortScheduler(int initialCapacity = 10);
     PortScheduler(const PortScheduler& other);
     PortScheduler& operator=(const PortScheduler& other);
     ~PortScheduler();
 
-    void addJob(const HandlingJob& job);
+    bool addJob(const HandlingJob& job);
     int selectNextJob() const;
+    void prioritizeJobs();
     int prioritizeJobs(int currentTime, int urgencyWindow);
 
-    HandlingJob* getJobAt(int index);
+    HandlingJob* getJob(int index);
     HandlingJob* findJob(int jobId);
     const HandlingJob* findJob(int jobId) const;
 
     int getJobCount() const;
-    int countPendingJobs() const;
+    int getPendingCount() const;
     int countUnfinishedJobs(int shipId) const;
-    bool hasJobsForShip(int shipId) const;
     void displayPendingJobs() const;
 };
 

@@ -1,22 +1,31 @@
 #include "YardSlot.h"
-#include <iostream>
 
-using namespace std;
+const double YardSlot::MAX_WEIGHT = 50.0;
 
-YardSlot::YardSlot() {
-    slotId = 0;
-    storedContainerId = -1;
-    maximumWeight = 0.0;
-    allowedContainerType = TYPE_STANDARD;
-    isOccupied = false;
+bool YardSlot::isValidMaxWeight(double weight) {
+    return weight > 0.0 && weight <= MAX_WEIGHT;
 }
 
-YardSlot::YardSlot(int id, int type, double maxWeight) {
-    slotId = id;
-    storedContainerId = -1;
-    maximumWeight = (maxWeight > 0) ? maxWeight : 0.0;
-    allowedContainerType = (type >= TYPE_STANDARD && type <= TYPE_HAZARDOUS) ? type : TYPE_STANDARD;
-    isOccupied = false;
+// Placeholder used to fill arrays; it is invalid
+YardSlot::YardSlot()
+    : slotId(0), storedContainerId(-1), maximumWeight(0.0),
+      allowedContainerType(0), isOccupied(false), valid(false) {
+}
+
+// The type is checked with Container's own rule, so it lives in one place
+YardSlot::YardSlot(int slotId, double maxWeight, int allowedType)
+    : YardSlot() {
+    if (slotId <= 0 || !isValidMaxWeight(maxWeight) || !Container::isValidType(allowedType)) {
+        return;
+    }
+    this->slotId = slotId;
+    maximumWeight = maxWeight;
+    allowedContainerType = allowedType;
+    valid = true;
+}
+
+bool YardSlot::isValid() const {
+    return valid;
 }
 
 int YardSlot::getId() const {
@@ -36,28 +45,26 @@ double YardSlot::getMaximumWeight() const {
 }
 
 bool YardSlot::canStore(const Container& container) const {
-    return !isOccupied && container.isCompatibleWith(allowedContainerType) &&
-           container.getWeight() <= maximumWeight;
+    return container.isValid() && canStore(container.getType(), container.getWeight());
 }
 
 bool YardSlot::canStore(int containerType, double weight) const {
-    return !isOccupied && containerType == allowedContainerType &&
+    return isAvailable() && containerType == allowedContainerType &&
            weight <= maximumWeight;
 }
 
 // Type and weight check only, ignoring whether the slot is currently free
 bool YardSlot::accepts(const Container& container) const {
-    return container.isCompatibleWith(allowedContainerType) &&
+    return valid && container.isCompatibleWith(allowedContainerType) &&
            container.getWeight() <= maximumWeight;
 }
 
-bool YardSlot::store(const Container& container) {
-    if (!canStore(container)) {
-        cout << "Error: slot " << slotId << " cannot store container "
-             << container.getId() << endl;
+// The caller checks canStore() first; this only guards the slot's own state
+bool YardSlot::store(int containerId) {
+    if (!isAvailable() || containerId <= 0) {
         return false;
     }
-    storedContainerId = container.getId();
+    storedContainerId = containerId;
     isOccupied = true;
     return true;
 }
@@ -71,5 +78,5 @@ int YardSlot::release() {
 }
 
 bool YardSlot::isAvailable() const {
-    return !isOccupied;
+    return valid && !isOccupied;
 }
